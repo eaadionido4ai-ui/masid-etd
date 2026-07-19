@@ -676,18 +676,23 @@ function toggleRecord() {
   if (!cam || !cam.stream) return;
   if (!cam.recording) {
     cam.chunks = [];
-    try { cam.rec = new MediaRecorder(cam.stream); }
+    let rec;
+    try { rec = new MediaRecorder(cam.stream); }
     catch (e) { alert("Video recording isn't supported in this browser."); return; }
-    cam.rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) cam.chunks.push(ev.data); };
-    cam.rec.onstop = async () => {
+    cam.rec = rec;
+    // Capture what the callbacks need in locals: MediaRecorder fires these
+    // asynchronously, and cam may already be null by the time they run
+    // (e.g. the user closed the camera), so we must not dereference it.
+    const chunks = cam.chunks, rowId = cam.rowId;
+    rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data); };
+    rec.onstop = async () => {
       if (cam && cam.timer) { clearInterval(cam.timer); cam.timer = null; }
-      const type = (cam.rec && cam.rec.mimeType) || "video/webm";
-      const blob = new Blob(cam.chunks, { type });
-      const rowId = cam.rowId;
-      stopStream(); cam = null;
+      const type = rec.mimeType || "video/webm";
+      const blob = new Blob(chunks, { type });
+      stopStream(); cam = null; render();
       await addMedia(rowId, new File([blob], "video_" + Date.now(), { type }), "video");
     };
-    cam.rec.start();
+    rec.start();
     cam.recording = true; cam.elapsed = 0;
     cam.timer = setInterval(() => {
       if (!cam || !cam.recording) return;
@@ -704,7 +709,11 @@ function toggleRecord() {
 }
 function closeCamera() {
   if (cam && cam.timer) { clearInterval(cam.timer); cam.timer = null; }
-  if (cam && cam.recording) { try { cam.rec.stop(); } catch (e) {} }
+  // Closing cancels an in-progress recording: detach the callbacks first so
+  // the discarded clip isn't saved and nothing fires against a null cam, then
+  // stop the recorder before releasing the stream so the device is freed and
+  // the next Record works.
+  if (cam && cam.rec) { cam.rec.ondataavailable = null; cam.rec.onstop = null; try { cam.rec.stop(); } catch (e) {} }
   stopStream(); cam = null; render();
 }
 function camView() {
